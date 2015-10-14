@@ -3,32 +3,45 @@ extern crate mio;
 use mio::tcp::*;
 use mio::*;
 use mio::util::Slab;
+use std::thread;
+use std::sync::mpsc::{self,channel};
 
 const SERVER: mio::Token = mio::Token(0);
 
 struct MiChat {
     listener: TcpListener,
     connections: Slab<Connection>,
+    commands: mpsc::Sender<String>
 }
 
-#[derive(Debug)]
+impl MiChat {
+    fn new(listener: TcpListener, commands: mpsc::Sender<String>) -> MiChat {
+        MiChat {
+            listener: listener,
+            connections: Slab::new_starting_at(mio::Token(1), 1024),
+            commands: commands
+        }
+    }
+}
 struct Connection {
     socket: TcpStream,
     token: mio::Token,
     state: Option<Vec<u8>>,
+    commands: mpsc::Sender<String>,
 }
 
 
 impl Connection {
-    fn new(socket: TcpStream, token: mio::Token) -> Connection {
+    fn new(socket: TcpStream, token: mio::Token, commands: mpsc::Sender<String>) -> Connection {
         Connection {
             socket: socket,
             token: token,
-            state: Some(Vec::with_capacity(1024))
+            state: Some(Vec::with_capacity(1024)),
+            commands: commands,
         }
     }
     fn ready(&mut self, event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
-        println!("Connection::ready: {:?}; {:?}", self, events);
+        println!("Connection::ready: {:?}; {:?}", self.socket.peer_addr(), events);
         if events.is_readable() {
             self.read(event_loop)
         }
@@ -38,16 +51,15 @@ impl Connection {
         let mut abuf = Vec::new();
         match self.socket.try_read_buf(&mut abuf) {
             Ok(Some(0)) => {
-                println!("{:?}: EOF!", self);
+                println!("{:?}: EOF!", self.socket.peer_addr());
                 self.finish()
             },
             Ok(Some(n)) => {
-                println!("Read so far: {:?}", n);
                 self.ingest(abuf);
                 self.reregister(event_loop)
             },
             Ok(None) => {
-                println!("{:?}: Noop!", self);
+                println!("{:?}: Noop!", self.socket.peer_addr());
                 self.reregister(event_loop)
             },
             Err(e) => panic!("got an error trying to read; err={:?}", e)
@@ -66,9 +78,9 @@ impl Connection {
             Some(ref mut buf)  => {
                 let mut startpos = 0;
                 while let Some(n) = inbuf.iter().skip(startpos).position(|e| *e == '\n' as u8) {
-                    println!("Newline from {} @{}", startpos, n);
                     Self::buffer_slice(buf, &inbuf[startpos..startpos+n]);
-                    println!("Line: {}", String::from_utf8_lossy(buf));
+                    let s = String::from_utf8_lossy(buf).into_owned();
+                    self.commands.send(s).unwrap();
                     startpos += n+1;
                     buf.clear()
                 }
@@ -109,9 +121,9 @@ impl mio::Handler for MiChat {
                 println!("the listener socket is ready to accept a connection");
                 match self.listener.accept() {
                     Ok(Some(socket)) => {
-                        println!("accepted a socket, exiting program");
+                        let commands = self.commands.clone();
                         let token = self.connections
-                            .insert_with(|token| Connection::new(socket, token))
+                            .insert_with(|token| Connection::new(socket, token, commands))
                             .unwrap();
 
                         event_loop.register_opt(
@@ -139,6 +151,25 @@ impl mio::Handler for MiChat {
     }
 }
 
+struct Model {
+    count: usize
+}
+
+impl Model {
+    fn new() -> Model {
+        Model { count: 0 }
+    }
+
+    fn process_from(&mut self, rx: mpsc::Receiver<String>) {
+        loop {
+            let msg = rx.recv().unwrap();
+            self.count += msg.len();
+            println!("{}: {}; got {}", thread::current().name().unwrap_or("???"),
+                    self.count, msg);
+        }
+    }
+}
+
 fn main() {
     let address = "0.0.0.0:6567".parse().unwrap();
     let listener = TcpListener::bind(&address).unwrap();
@@ -147,6 +178,14 @@ fn main() {
     event_loop.register(&listener, SERVER).unwrap();
 
     println!("running michat listener at: {:?}", address);
-    let mut service = MiChat { listener: listener, connections: Slab::new_starting_at(mio::Token(1), 1024) };
+
+    let (tx, rx) = channel();
+    let t = thread::Builder::new().name("Model".to_owned()).spawn(move|| {
+        let mut model = Model::new();
+        model.process_from(rx);
+    }).unwrap();
+
+    let mut service = MiChat::new(listener, tx);
     event_loop.run(&mut service).unwrap();
+    t.join().unwrap();
 }
