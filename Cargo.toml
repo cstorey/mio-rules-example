@@ -2,3 +2,6 @@
 name = "michat"
 version = "0.1.0"
 authors = ["Ceri Storey <ceri@lshift.net>"]
+
+[dependencies]
+mio = "*"
