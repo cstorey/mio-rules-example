@@ -1,5 +1,8 @@
 extern crate mio;
 extern crate bytes;
+extern crate log4rs;
+#[macro_use]
+extern crate log;
 
 use mio::tcp::*;
 use mio::{Sender,EventLoop};
@@ -30,6 +33,7 @@ impl MiChat {
         }
     }
 }
+
 struct Connection {
     socket: TcpStream,
     token: mio::Token,
@@ -50,7 +54,7 @@ impl Connection {
         }
     }
     fn ready(&mut self, event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
-        println!("Connection::ready: {:?}; {:?}", self.socket.peer_addr(), events);
+        info!("Connection::ready: {:?}; {:?}", self.socket.peer_addr(), events);
         if events.is_readable() {
             self.read(event_loop)
         }
@@ -63,15 +67,16 @@ impl Connection {
         let mut abuf = Vec::new();
         match self.socket.try_read_buf(&mut abuf) {
             Ok(Some(0)) => {
-                println!("{:?}: EOF!", self.socket.peer_addr());
+                info!("{:?}: EOF!", self.socket.peer_addr());
                 self.finish()
             },
             Ok(Some(n)) => {
+                info!("{:?}: Read {}bytes", self.socket.peer_addr(), n);
                 self.ingest(abuf);
                 self.reregister(event_loop)
             },
             Ok(None) => {
-                println!("{:?}: Noop!", self.socket.peer_addr());
+                info!("{:?}: Noop!", self.socket.peer_addr());
                 self.reregister(event_loop)
             },
             Err(e) => panic!("got an error trying to read; err={:?}", e)
@@ -80,19 +85,18 @@ impl Connection {
 
     fn notify(&mut self, event_loop: &mut mio::EventLoop<MiChat>, s: String) {
         self.write_buf.extend(s.bytes());
-        self.write_buf.push('\n' as u8);
         self.reregister(event_loop);
     }
 
     fn write(&mut self, event_loop: &mut mio::EventLoop<MiChat>) {
         match self.socket.try_write(&mut self.write_buf) {
             Ok(Some(n)) => {
-                println!("Wrote {} of {} in buffer", n, self.write_buf.len());
+                info!("Wrote {} of {} in buffer", n, self.write_buf.len());
                 self.reregister(event_loop);
                 self.write_buf = self.write_buf[n..].to_vec();
             },
             Ok(None) => {
-                println!("Write unready");
+                info!("Write unready");
                 self.reregister(event_loop);
             },
             Err(e) => {
@@ -119,13 +123,13 @@ impl Connection {
             Some(ref mut buf)  => {
                 let mut startpos = 0;
                 while let Some(n) = inbuf.iter().skip(startpos).position(|e| *e == '\n' as u8) {
-                    Self::buffer_slice(buf, &inbuf[startpos..startpos+n]);
+                    Self::buffer_slice(buf, &inbuf[startpos..startpos+n+1]);
                     let s = String::from_utf8_lossy(buf).into_owned();
                     self.commands.send((self.token, s)).unwrap();
                     startpos += n+1;
                     buf.clear()
                 }
-                println!("Remainder: {}", String::from_utf8_lossy(&inbuf[startpos..]));
+                info!("Remainder: {}", String::from_utf8_lossy(&inbuf[startpos..]));
                 Self::buffer_slice(buf, &inbuf[startpos..])
             },
             None => panic!("Ingest on closed connection?")
@@ -134,7 +138,7 @@ impl Connection {
 
     fn finish(&mut self) {
         match self.state {
-            Some(ref mut buf)  => println!("Remainder: {}", String::from_utf8_lossy(buf)),
+            Some(ref mut buf)  => info!("Remainder: {}", String::from_utf8_lossy(buf)),
             _ => ()
         }
         self.state = None
@@ -153,13 +157,13 @@ impl mio::Handler for MiChat {
     type Timeout = ();
     type Message = MiChatMessage;
     fn ready(&mut self, event_loop: &mut mio::EventLoop<Self>, token: mio::Token, events: mio::EventSet) {
-        println!("{:?}: {:?}", token, events);
+        info!("{:?}: {:?}", token, events);
         match token {
             SERVER => {
                 // Only receive readable events
                 assert!(events.is_readable());
 
-                println!("the listener socket is ready to accept a connection");
+                info!("the listener socket is ready to accept a connection");
                 match self.listener.accept() {
                     Ok(Some(socket)) => {
                         let commands = self.commands.clone();
@@ -174,10 +178,10 @@ impl mio::Handler for MiChat {
                             mio::PollOpt::edge() | mio::PollOpt::oneshot()).unwrap();
                     }
                     Ok(None) => {
-                        println!("the listener socket wasn't actually ready");
+                        info!("the listener socket wasn't actually ready");
                     }
                     Err(e) => {
-                        println!("listener.accept() errored: {}", e);
+                        info!("listener.accept() errored: {}", e);
                         event_loop.shutdown();
                     }
                 }
@@ -192,10 +196,13 @@ impl mio::Handler for MiChat {
     }
 
     fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: MiChatMessage) {
-        println!("Notify: {:?}", msg);
+        info!("Notify: {:?}", msg);
         let (token, s) = msg;
-        self.connections.get_mut(token)
-            .map(|conn| conn.notify(event_loop, s));
+        if let Some(conn) = self.connections.get_mut(token) {
+            conn.notify(event_loop, s);
+        } else {
+            warn!("No connection for token: {:?}", token);
+        }
     }
 }
 
@@ -212,21 +219,27 @@ impl Model {
         loop {
             let msg = rx.recv().unwrap();
             self.count += msg.1.len();
-            println!("{}: {}; got {:?}", thread::current().name().unwrap_or("???"),
+            info!("{}: {}; got {:?}", thread::current().name().unwrap_or("???"),
                     self.count, msg);
             replies.send(msg).unwrap();
         }
     }
 }
 
+const LOG_FILE: &'static str = "log.toml";
+
 fn main() {
+    if let Err(e) = log4rs::init_file(LOG_FILE, Default::default()) {
+        panic!("Could not init logger from file {}: {}", LOG_FILE, e);
+    }
+
     let address = "0.0.0.0:6567".parse().unwrap();
     let listener = TcpListener::bind(&address).unwrap();
 
     let mut event_loop = mio::EventLoop::new().unwrap();
     event_loop.register(&listener, SERVER).unwrap();
 
-    println!("running michat listener at: {:?}", address);
+    info!("running michat listener at: {:?}", address);
 
     let (command_tx, command_rx) = channel();
     let replies = event_loop.channel();

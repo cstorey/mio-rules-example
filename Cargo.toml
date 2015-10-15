@@ -6,3 +6,5 @@ authors = ["Ceri Storey <ceri@lshift.net>"]
 [dependencies]
 mio = "0.4.1"
 bytes = "0.2.10"
+log = "*"
+log4rs = "*"
