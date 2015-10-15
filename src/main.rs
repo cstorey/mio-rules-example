@@ -17,7 +17,11 @@ use bytes::{Buf, Take};
 const SERVER: mio::Token = mio::Token(0);
 
 #[derive(Debug)]
-struct MiChatCommand (mio::Token, String);
+enum MiChatCommand {
+    Set(String),
+    Get(mio::Token),
+}
+
 #[derive(Debug)]
 struct MiChatIoEvent (mio::Token, String);
 
@@ -88,6 +92,7 @@ impl Connection {
 
     fn notify(&mut self, event_loop: &mut mio::EventLoop<MiChat>, s: String) {
         self.write_buf.extend(s.bytes());
+        self.write_buf.push('\n' as u8);
         self.reregister(event_loop);
     }
 
@@ -126,9 +131,10 @@ impl Connection {
             Some(ref mut buf)  => {
                 let mut startpos = 0;
                 while let Some(n) = inbuf.iter().skip(startpos).position(|e| *e == '\n' as u8) {
-                    Self::buffer_slice(buf, &inbuf[startpos..startpos+n+1]);
+                    Self::buffer_slice(buf, &inbuf[startpos..startpos+n]);
                     let s = String::from_utf8_lossy(buf).into_owned();
-                    self.commands.send(MiChatCommand(self.token, s)).unwrap();
+                    let cmd = if s.is_empty() { MiChatCommand::Get(self.token) } else { MiChatCommand::Set(s) };
+                    self.commands.send(cmd).unwrap();
                     startpos += n+1;
                     buf.clear()
                 }
@@ -145,6 +151,7 @@ impl Connection {
             _ => ()
         }
         self.state = None
+
     }
 
     fn buffer_slice(buf: &mut Vec<u8>, slice: &[u8]) {
@@ -209,22 +216,28 @@ impl mio::Handler for MiChat {
     }
 }
 
+#[derive(Debug)]
 struct Model {
-    count: usize
+    value: String
 }
 
 impl Model {
     fn new() -> Model {
-        Model { count: 0 }
+        Model { value: "".to_string() }
     }
 
     fn process_from(&mut self, rx: mpsc::Receiver<MiChatCommand>, replies: Sender<MiChatIoEvent>) {
         loop {
-            let MiChatCommand(tok, s) = rx.recv().unwrap();
-            self.count += s.len();
-            info!("{}: {}; got {:?}", thread::current().name().unwrap_or("???"),
-                    self.count, (tok, &s));
-            replies.send(MiChatIoEvent(tok, s)).unwrap();
+            let msg = rx.recv().unwrap();
+            info!("{:?}; got {:?}", self, msg);
+            match msg {
+                MiChatCommand::Set(s) => {
+                    self.value = s;
+                },
+                MiChatCommand::Get(tok) => {
+                    replies.send(MiChatIoEvent(tok, self.value.clone())).unwrap();
+                }
+            }
         }
     }
 }
