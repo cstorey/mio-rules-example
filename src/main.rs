@@ -93,6 +93,7 @@ impl Connection {
     fn notify(&mut self, event_loop: &mut mio::EventLoop<MiChat>, s: String) {
         self.write_buf.extend(s.bytes());
         self.write_buf.push('\n' as u8);
+        self.write(event_loop);
         self.reregister(event_loop);
     }
 
@@ -100,8 +101,8 @@ impl Connection {
         match self.socket.try_write(&mut self.write_buf) {
             Ok(Some(n)) => {
                 info!("Wrote {} of {} in buffer", n, self.write_buf.len());
-                self.reregister(event_loop);
                 self.write_buf = self.write_buf[n..].to_vec();
+                self.reregister(event_loop);
             },
             Ok(None) => {
                 info!("Write unready");
