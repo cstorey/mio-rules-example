@@ -16,16 +16,19 @@ use bytes::{Buf, Take};
 
 const SERVER: mio::Token = mio::Token(0);
 
-type MiChatMessage = (mio::Token, String);
+#[derive(Debug)]
+struct MiChatCommand (mio::Token, String);
+#[derive(Debug)]
+struct MiChatIoEvent (mio::Token, String);
 
 struct MiChat {
     listener: TcpListener,
     connections: Slab<Connection>,
-    commands: mpsc::Sender<MiChatMessage>
+    commands: mpsc::Sender<MiChatCommand>
 }
 
 impl MiChat {
-    fn new(listener: TcpListener, commands: mpsc::Sender<MiChatMessage>) -> MiChat {
+    fn new(listener: TcpListener, commands: mpsc::Sender<MiChatCommand>) -> MiChat {
         MiChat {
             listener: listener,
             connections: Slab::new_starting_at(mio::Token(1), 1024),
@@ -39,12 +42,12 @@ struct Connection {
     token: mio::Token,
     state: Option<Vec<u8>>,
     write_buf: Vec<u8>,
-    commands: mpsc::Sender<MiChatMessage>,
+    commands: mpsc::Sender<MiChatCommand>,
 }
 
 
 impl Connection {
-    fn new(socket: TcpStream, token: mio::Token, commands: mpsc::Sender<MiChatMessage>) -> Connection {
+    fn new(socket: TcpStream, token: mio::Token, commands: mpsc::Sender<MiChatCommand>) -> Connection {
         Connection {
             socket: socket,
             token: token,
@@ -125,7 +128,7 @@ impl Connection {
                 while let Some(n) = inbuf.iter().skip(startpos).position(|e| *e == '\n' as u8) {
                     Self::buffer_slice(buf, &inbuf[startpos..startpos+n+1]);
                     let s = String::from_utf8_lossy(buf).into_owned();
-                    self.commands.send((self.token, s)).unwrap();
+                    self.commands.send(MiChatCommand(self.token, s)).unwrap();
                     startpos += n+1;
                     buf.clear()
                 }
@@ -155,7 +158,7 @@ impl Connection {
 
 impl mio::Handler for MiChat {
     type Timeout = ();
-    type Message = MiChatMessage;
+    type Message = MiChatIoEvent;
     fn ready(&mut self, event_loop: &mut mio::EventLoop<Self>, token: mio::Token, events: mio::EventSet) {
         info!("{:?}: {:?}", token, events);
         match token {
@@ -195,9 +198,9 @@ impl mio::Handler for MiChat {
         }
     }
 
-    fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: MiChatMessage) {
+    fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: MiChatIoEvent) {
         info!("Notify: {:?}", msg);
-        let (token, s) = msg;
+        let MiChatIoEvent(token, s) = msg;
         if let Some(conn) = self.connections.get_mut(token) {
             conn.notify(event_loop, s);
         } else {
@@ -215,13 +218,13 @@ impl Model {
         Model { count: 0 }
     }
 
-    fn process_from(&mut self, rx: mpsc::Receiver<MiChatMessage>, replies: Sender<MiChatMessage>) {
+    fn process_from(&mut self, rx: mpsc::Receiver<MiChatCommand>, replies: Sender<MiChatIoEvent>) {
         loop {
-            let msg = rx.recv().unwrap();
-            self.count += msg.1.len();
+            let MiChatCommand(tok, s) = rx.recv().unwrap();
+            self.count += s.len();
             info!("{}: {}; got {:?}", thread::current().name().unwrap_or("???"),
-                    self.count, msg);
-            replies.send(msg).unwrap();
+                    self.count, (tok, &s));
+            replies.send(MiChatIoEvent(tok, s)).unwrap();
         }
     }
 }
