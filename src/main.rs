@@ -3,6 +3,8 @@ extern crate bytes;
 extern crate log4rs;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate clap;
 
 use mio::tcp::*;
 use mio::{Sender,EventLoop};
@@ -11,6 +13,7 @@ use mio::util::Slab;
 use std::thread;
 use std::sync::mpsc::{self,channel};
 use std::io::Cursor;
+use clap::{Arg, App, SubCommand};
 
 use bytes::{Buf, Take};
 
@@ -249,8 +252,11 @@ fn main() {
     if let Err(e) = log4rs::init_file(LOG_FILE, Default::default()) {
         panic!("Could not init logger from file {}: {}", LOG_FILE, e);
     }
+    let matches = App::new("michat")
+        .arg(Arg::with_name("bind").short("l").takes_value(true).required(true))
+        .get_matches();
 
-    let address = "0.0.0.0:6567".parse().unwrap();
+    let address = value_t_or_exit!(matches.value_of("bind"), std::net::SocketAddr);
     let listener = TcpListener::bind(&address).unwrap();
 
     let mut event_loop = mio::EventLoop::new().unwrap();
