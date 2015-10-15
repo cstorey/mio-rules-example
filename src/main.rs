@@ -1,21 +1,28 @@
 extern crate mio;
+extern crate bytes;
 
 use mio::tcp::*;
-use mio::*;
+use mio::{Sender,EventLoop};
+use mio::{TryRead,TryWrite};
 use mio::util::Slab;
 use std::thread;
 use std::sync::mpsc::{self,channel};
+use std::io::Cursor;
+
+use bytes::{Buf, Take};
 
 const SERVER: mio::Token = mio::Token(0);
+
+type MiChatMessage = (mio::Token, String);
 
 struct MiChat {
     listener: TcpListener,
     connections: Slab<Connection>,
-    commands: mpsc::Sender<String>
+    commands: mpsc::Sender<MiChatMessage>
 }
 
 impl MiChat {
-    fn new(listener: TcpListener, commands: mpsc::Sender<String>) -> MiChat {
+    fn new(listener: TcpListener, commands: mpsc::Sender<MiChatMessage>) -> MiChat {
         MiChat {
             listener: listener,
             connections: Slab::new_starting_at(mio::Token(1), 1024),
@@ -27,16 +34,18 @@ struct Connection {
     socket: TcpStream,
     token: mio::Token,
     state: Option<Vec<u8>>,
-    commands: mpsc::Sender<String>,
+    write_buf: Vec<u8>,
+    commands: mpsc::Sender<MiChatMessage>,
 }
 
 
 impl Connection {
-    fn new(socket: TcpStream, token: mio::Token, commands: mpsc::Sender<String>) -> Connection {
+    fn new(socket: TcpStream, token: mio::Token, commands: mpsc::Sender<MiChatMessage>) -> Connection {
         Connection {
             socket: socket,
             token: token,
             state: Some(Vec::with_capacity(1024)),
+            write_buf: Vec::new(),
             commands: commands,
         }
     }
@@ -44,6 +53,9 @@ impl Connection {
         println!("Connection::ready: {:?}; {:?}", self.socket.peer_addr(), events);
         if events.is_readable() {
             self.read(event_loop)
+        }
+        if events.is_writable() {
+            self.write(event_loop)
         }
     }
 
@@ -65,11 +77,40 @@ impl Connection {
             Err(e) => panic!("got an error trying to read; err={:?}", e)
         }
     }
+
+    fn notify(&mut self, event_loop: &mut mio::EventLoop<MiChat>, s: String) {
+        self.write_buf.extend(s.bytes());
+        self.write_buf.push('\n' as u8);
+        self.reregister(event_loop);
+    }
+
+    fn write(&mut self, event_loop: &mut mio::EventLoop<MiChat>) {
+        match self.socket.try_write(&mut self.write_buf) {
+            Ok(Some(n)) => {
+                println!("Wrote {} of {} in buffer", n, self.write_buf.len());
+                self.reregister(event_loop);
+                self.write_buf = self.write_buf[n..].to_vec();
+            },
+            Ok(None) => {
+                println!("Write unready");
+                self.reregister(event_loop);
+            },
+            Err(e) => {
+                panic!("got an error trying to write; err={:?}", e);
+            }
+        }
+    }
+
     fn reregister(&mut self, event_loop: &mut mio::EventLoop<MiChat>) {
+        let mut flags = mio::EventSet::readable();
+        if !self.write_buf.is_empty() {
+            flags = flags | mio::EventSet::writable();
+        }
+
         event_loop.reregister(
                 &self.socket,
                 self.token,
-                mio::EventSet::readable(),
+                flags,
                 mio::PollOpt::oneshot()).unwrap()
 
     }
@@ -80,7 +121,7 @@ impl Connection {
                 while let Some(n) = inbuf.iter().skip(startpos).position(|e| *e == '\n' as u8) {
                     Self::buffer_slice(buf, &inbuf[startpos..startpos+n]);
                     let s = String::from_utf8_lossy(buf).into_owned();
-                    self.commands.send(s).unwrap();
+                    self.commands.send((self.token, s)).unwrap();
                     startpos += n+1;
                     buf.clear()
                 }
@@ -104,13 +145,13 @@ impl Connection {
     }
 
     fn is_closed(&self) -> bool {
-        self.state.is_none()
+        self.state.is_none() && self.write_buf.is_empty()
     }
 }
 
 impl mio::Handler for MiChat {
     type Timeout = ();
-    type Message = ();
+    type Message = MiChatMessage;
     fn ready(&mut self, event_loop: &mut mio::EventLoop<Self>, token: mio::Token, events: mio::EventSet) {
         println!("{:?}: {:?}", token, events);
         match token {
@@ -149,6 +190,13 @@ impl mio::Handler for MiChat {
             }
         }
     }
+
+    fn notify(&mut self, event_loop: &mut EventLoop<Self>, msg: MiChatMessage) {
+        println!("Notify: {:?}", msg);
+        let (token, s) = msg;
+        self.connections.get_mut(token)
+            .map(|conn| conn.notify(event_loop, s));
+    }
 }
 
 struct Model {
@@ -160,12 +208,13 @@ impl Model {
         Model { count: 0 }
     }
 
-    fn process_from(&mut self, rx: mpsc::Receiver<String>) {
+    fn process_from(&mut self, rx: mpsc::Receiver<MiChatMessage>, replies: Sender<MiChatMessage>) {
         loop {
             let msg = rx.recv().unwrap();
-            self.count += msg.len();
-            println!("{}: {}; got {}", thread::current().name().unwrap_or("???"),
+            self.count += msg.1.len();
+            println!("{}: {}; got {:?}", thread::current().name().unwrap_or("???"),
                     self.count, msg);
+            replies.send(msg).unwrap();
         }
     }
 }
@@ -179,13 +228,14 @@ fn main() {
 
     println!("running michat listener at: {:?}", address);
 
-    let (tx, rx) = channel();
+    let (command_tx, command_rx) = channel();
+    let replies = event_loop.channel();
     let t = thread::Builder::new().name("Model".to_owned()).spawn(move|| {
         let mut model = Model::new();
-        model.process_from(rx);
+        model.process_from(command_rx, replies);
     }).unwrap();
 
-    let mut service = MiChat::new(listener, tx);
+    let mut service = MiChat::new(listener, command_tx);
     event_loop.run(&mut service).unwrap();
     t.join().unwrap();
 }
