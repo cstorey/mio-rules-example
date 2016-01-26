@@ -13,31 +13,55 @@ use mio::util::Slab;
 use std::collections::VecDeque;
 use clap::{Arg, App};
 
-const SERVER: mio::Token = mio::Token(0);
-
 #[derive(Debug)]
 enum MiChatCommand {
     Broadcast(String),
+    NewConnection(TcpStream),
 }
 
 struct MiChat {
-    listener: TcpListener,
-    connections: Slab<Connection>,
+    connections: Slab<EventHandler>,
 }
 
 impl MiChat {
-    fn new(listener: TcpListener) -> MiChat {
+    fn new() -> MiChat {
         MiChat {
-            listener: listener,
-            connections: Slab::new_starting_at(mio::Token(1), 1024),
+            connections: Slab::new(1024),
         }
     }
-    fn process_action(&mut self, msg: &MiChatCommand) {
+
+    fn listen(&mut self, event_loop: &mut mio::EventLoop<MiChat>, listener: TcpListener) {
+        let l = EventHandler::Listener(Listener::new(listener));
+        let server = self.connections.insert(l).expect("insert listener");
+        if let &EventHandler::Listener(ref l) = &self.connections[server] {
+            event_loop.register(&l.listener, server).expect("Register listener");
+        }
+    }
+
+
+    fn process_action(&mut self, msg: MiChatCommand, event_loop: &mut mio::EventLoop<MiChat>) {
         trace!("{:p}; got {:?}", self, msg);
         match msg {
-            &MiChatCommand::Broadcast(ref s) => {
+            MiChatCommand::Broadcast(s) => {
                 for c in self.connections.iter_mut() {
-                    c.enqueue(&s);
+                    if let &mut EventHandler::Conn(ref mut c) = c {
+                        c.enqueue(&s);
+                    }
+                }
+            },
+
+            MiChatCommand::NewConnection(socket) => {
+                let token = self.connections
+                    .insert_with(|token| EventHandler::Conn(Connection::new(socket, token)))
+                    .expect("token insert");
+
+                if let EventHandler::Conn(ref c) = self.connections[token] {
+                    event_loop.register_opt(
+                            &c.socket,
+                            token,
+                            mio::EventSet::readable(),
+                            mio::PollOpt::edge() | mio::PollOpt::oneshot())
+                        .expect("event loop register");
                 }
             }
         }
@@ -55,7 +79,6 @@ struct Connection {
     write_buf: Vec<u8>,
 }
 
-
 impl Connection {
     fn new(socket: TcpStream, token: mio::Token) -> Connection {
         Connection {
@@ -69,9 +92,9 @@ impl Connection {
         }
     }
     // Event updates arrive here
-    fn ready(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
+    fn handle_event(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
         self.sock_status.insert(events);
-        info!("Connection::ready: {:?}; this time: {:?}; now: {:?}",
+        info!("Connection::handle_event: {:?}; this time: {:?}; now: {:?}",
                 self.socket.peer_addr(), events, self.sock_status);
     }
 
@@ -137,8 +160,8 @@ impl Connection {
     fn write(&mut self) {
         match self.socket.try_write(&mut self.write_buf) {
             Ok(Some(n)) => {
-                info!("{:?}: Wrote {} of {} in buffer ({:?}...)", self.socket.peer_addr(), n,
-                    self.write_buf.len(), &self.write_buf[0..2]);
+                info!("{:?}: Wrote {} of {} in buffer", self.socket.peer_addr(), n,
+                    self.write_buf.len());
                 self.write_buf = self.write_buf[n..].to_vec();
                 info!("{:?}: Now {:?}b", self.socket.peer_addr(), self.write_buf.len());
             },
@@ -178,44 +201,93 @@ impl Connection {
     }
 }
 
+#[derive(Debug)]
+struct Listener {
+    listener: TcpListener,
+    sock_status: mio::EventSet,
+}
+
+impl Listener {
+    fn new(listener: TcpListener) -> Listener {
+        Listener {
+            listener: listener,
+            sock_status: mio::EventSet::none(),
+        }
+    }
+
+    fn handle_event(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
+        assert!(events.is_readable());
+        self.sock_status.insert(events);
+        info!("Listener::handle_event: {:?}; this time: {:?}; now: {:?}",
+                self.listener.local_addr(), events, self.sock_status);
+    }
+
+    fn process_rules(&mut self, event_loop: &mut mio::EventLoop<MiChat>,
+            to_parent: &mut VecDeque<MiChatCommand>) {
+        info!("the listener socket is ready to accept a connection");
+        match self.listener.accept() {
+            Ok(Some(socket)) => {
+                let cmd = MiChatCommand::NewConnection(socket);
+                to_parent.push_back(cmd);
+
+/*
+*/
+
+            }
+            Ok(None) => {
+                info!("the listener socket wasn't actually ready");
+            }
+            Err(e) => {
+                info!("listener.accept() errored: {}", e);
+                event_loop.shutdown();
+            }
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Debug)]
+enum EventHandler {
+    Listener (Listener),
+    Conn (Connection),
+}
+
+impl EventHandler {
+    fn handle_event(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
+        match self {
+            &mut EventHandler::Conn(ref mut conn) => conn.handle_event(_event_loop, events),
+            &mut EventHandler::Listener(ref mut listener) => listener.handle_event(_event_loop, events)
+        }
+    }
+
+    fn process_rules(&mut self, event_loop: &mut mio::EventLoop<MiChat>,
+        to_parent: &mut VecDeque<MiChatCommand>) {
+        match self {
+            &mut EventHandler::Conn(ref mut conn) => conn.process_rules(event_loop, to_parent),
+            &mut EventHandler::Listener(ref mut listener) => listener.process_rules(event_loop, to_parent)
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        match self {
+            &EventHandler::Conn(ref conn) => conn.is_closed(),
+            &EventHandler::Listener(ref listener) => listener.is_closed()
+        }
+    }
+
+}
+
 impl mio::Handler for MiChat {
     type Timeout = ();
     type Message = ();
     fn ready(&mut self, event_loop: &mut mio::EventLoop<Self>, token: mio::Token, events: mio::EventSet) {
         info!("{:?}: {:?}", token, events);
-        let mut next = VecDeque::new();
-
         match token {
-            SERVER => {
-                // Only receive readable events
-                assert!(events.is_readable());
-
-                info!("the listener socket is ready to accept a connection");
-                match self.listener.accept() {
-                    Ok(Some(socket)) => {
-                        let token = self.connections
-                            .insert_with(|token| Connection::new(socket, token))
-                            .expect("token insert");
-
-                        event_loop.register_opt(
-                            &self.connections[token].socket,
-                            token,
-                            mio::EventSet::readable(),
-                            mio::PollOpt::edge() | mio::PollOpt::oneshot())
-                        .expect("event loop register");
-                    }
-                    Ok(None) => {
-                        info!("the listener socket wasn't actually ready");
-                    }
-                    Err(e) => {
-                        info!("listener.accept() errored: {}", e);
-                        event_loop.shutdown();
-                    }
-                }
-            }
             _ => {
-                self.connections[token].ready(event_loop, events);
-                info!("TODO next on {:?}: {:?}", token, next);
+                self.connections[token].handle_event(event_loop, events);
                 if self.connections[token].is_closed() {
                     info!("Removing; {:?}", token);
                     self.connections.remove(token);
@@ -223,16 +295,17 @@ impl mio::Handler for MiChat {
             }
         }
 
+        let mut parent_actions = VecDeque::new();
         loop {
             for conn in self.connections.iter_mut() {
-                conn.process_rules(event_loop, &mut next);
+                conn.process_rules(event_loop, &mut parent_actions);
             }
-            if next.is_empty() { break; }
+            // Anything left to process?
+            if parent_actions.is_empty() { break; }
 
-            for action in next.iter() {
-                self.process_action(action);
+            for action in parent_actions.drain(..) {
+                self.process_action(action, event_loop);
             }
-            next.clear();
         }
     }
 }
@@ -251,10 +324,9 @@ fn main() {
     let listener = TcpListener::bind(&address).expect("bind");
 
     let mut event_loop = mio::EventLoop::new().expect("Create event loop");
-    event_loop.register(&listener, SERVER).expect("Register listener");
+    let mut service = MiChat::new();
 
+    service.listen(&mut event_loop, listener);
     info!("running michat listener at: {:?}", address);
-
-    let mut service = MiChat::new(listener);
     event_loop.run(&mut service).expect("Run loop");
 }
