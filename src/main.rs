@@ -7,16 +7,11 @@ extern crate log;
 extern crate clap;
 
 use mio::tcp::*;
-use mio::{Sender,EventLoop};
+use mio::EventLoop;
 use mio::{TryRead,TryWrite};
 use mio::util::Slab;
-use std::thread;
-use std::sync::mpsc::{self,channel};
-use std::io::Cursor;
 use std::collections::VecDeque;
-use clap::{Arg, App, SubCommand};
-
-use bytes::{Buf, Take};
+use clap::{Arg, App};
 
 const SERVER: mio::Token = mio::Token(0);
 
@@ -25,13 +20,9 @@ enum MiChatCommand {
     Broadcast(String),
 }
 
-#[derive(Debug)]
-struct MiChatIoEvent (mio::Token, String);
-
 struct MiChat {
     listener: TcpListener,
     connections: Slab<Connection>,
-    register: String,
 }
 
 impl MiChat {
@@ -39,7 +30,6 @@ impl MiChat {
         MiChat {
             listener: listener,
             connections: Slab::new_starting_at(mio::Token(1), 1024),
-            register: String::new(),
         }
     }
     fn process_action(&mut self, msg: &MiChatCommand) {
@@ -79,7 +69,7 @@ impl Connection {
         }
     }
     // Event updates arrive here
-    fn ready(&mut self, event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
+    fn ready(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
         self.sock_status.insert(events);
         info!("Connection::ready: {:?}; this time: {:?}; now: {:?}",
                 self.socket.peer_addr(), events, self.sock_status);
@@ -90,14 +80,14 @@ impl Connection {
     fn process_rules(&mut self, event_loop: &mut mio::EventLoop<MiChat>,
         to_parent: &mut VecDeque<MiChatCommand>) {
         if self.sock_status.is_readable() {
-            self.read(event_loop);
+            self.read();
             self.sock_status.remove(mio::EventSet::readable());
         }
 
         self.process_buffer(to_parent);
 
         if self.sock_status.is_writable() {
-            self.write(event_loop);
+            self.write();
             self.sock_status.remove(mio::EventSet::writable());
         }
 
@@ -123,7 +113,7 @@ impl Connection {
         self.read_buf = remainder;
     }
 
-    fn read(&mut self, event_loop: &mut mio::EventLoop<MiChat>) {
+    fn read(&mut self) {
         let mut abuf = Vec::new();
         match self.socket.try_read_buf(&mut abuf) {
             Ok(Some(0)) => {
@@ -144,7 +134,7 @@ impl Connection {
         }
     }
 
-    fn write(&mut self, event_loop: &mut mio::EventLoop<MiChat>) {
+    fn write(&mut self) {
         match self.socket.try_write(&mut self.write_buf) {
             Ok(Some(n)) => {
                 info!("{:?}: Wrote {} of {} in buffer ({:?}...)", self.socket.peer_addr(), n,
@@ -177,10 +167,6 @@ impl Connection {
     }
 
 
-
-    fn buffer_slice(buf: &mut Vec<u8>, slice: &[u8]) {
-        buf.extend(slice.iter().cloned());
-    }
 
     fn is_closed(&self) -> bool {
         self.failed || (self.read_eof && self.write_buf.is_empty())
@@ -247,24 +233,6 @@ impl mio::Handler for MiChat {
                 self.process_action(action);
             }
             next.clear();
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Model {
-    value: String
-}
-
-impl Model {
-    fn new() -> Model {
-        Model { value: "".to_string() }
-    }
-
-    fn process_from(&mut self, rx: mpsc::Receiver<MiChatCommand>, replies: Sender<MiChatIoEvent>) {
-        loop {
-            let msg = rx.recv().expect("Model receive");
-
         }
     }
 }
