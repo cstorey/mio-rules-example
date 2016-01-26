@@ -32,10 +32,8 @@ impl MiChat {
 
     fn listen(&mut self, event_loop: &mut mio::EventLoop<MiChat>, listener: TcpListener) {
         let l = EventHandler::Listener(Listener::new(listener));
-        let server = self.connections.insert(l).expect("insert listener");
-        if let &EventHandler::Listener(ref l) = &self.connections[server] {
-            event_loop.register(&l.listener, server).expect("Register listener");
-        }
+        let token = self.connections.insert(l).expect("insert listener");
+        &self.connections[token].register(event_loop, token);
     }
 
 
@@ -54,15 +52,7 @@ impl MiChat {
                 let token = self.connections
                     .insert_with(|token| EventHandler::Conn(Connection::new(socket, token)))
                     .expect("token insert");
-
-                if let EventHandler::Conn(ref c) = self.connections[token] {
-                    event_loop.register_opt(
-                            &c.socket,
-                            token,
-                            mio::EventSet::readable(),
-                            mio::PollOpt::edge() | mio::PollOpt::oneshot())
-                        .expect("event loop register");
-                }
+                &self.connections[token].register(event_loop, token);
             }
         }
     }
@@ -91,6 +81,16 @@ impl Connection {
             failed: false,
         }
     }
+
+    fn register(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token) {
+        event_loop.register_opt(
+                &self.socket,
+                token,
+                mio::EventSet::readable(),
+                mio::PollOpt::edge() | mio::PollOpt::oneshot())
+            .expect("event loop register");
+    }
+
     // Event updates arrive here
     fn handle_event(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
         self.sock_status.insert(events);
@@ -215,6 +215,10 @@ impl Listener {
         }
     }
 
+    fn register(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token) {
+        event_loop.register(&self.listener, token).expect("Register listener");
+    }
+
     fn handle_event(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
         assert!(events.is_readable());
         self.sock_status.insert(events);
@@ -263,6 +267,14 @@ impl EventHandler {
         }
     }
 
+    fn register(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token) {
+        match self {
+            &EventHandler::Conn(ref conn) => conn.register(event_loop, token),
+            &EventHandler::Listener(ref listener) => listener.register(event_loop, token)
+        }
+    }
+
+
     fn process_rules(&mut self, event_loop: &mut mio::EventLoop<MiChat>,
         to_parent: &mut VecDeque<MiChatCommand>) {
         match self {
@@ -277,7 +289,6 @@ impl EventHandler {
             &EventHandler::Listener(ref listener) => listener.is_closed()
         }
     }
-
 }
 
 impl mio::Handler for MiChat {
