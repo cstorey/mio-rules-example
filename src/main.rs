@@ -228,19 +228,22 @@ impl Listener {
 
     fn process_rules(&mut self, event_loop: &mut mio::EventLoop<MiChat>,
             to_parent: &mut VecDeque<MiChatCommand>) {
-        info!("the listener socket is ready to accept a connection");
-        match self.listener.accept() {
-            Ok(Some(socket)) => {
-                let cmd = MiChatCommand::NewConnection(socket);
-                to_parent.push_back(cmd);
+        if self.sock_status.is_readable() {
+            info!("the listener socket is ready to accept a connection");
+            match self.listener.accept() {
+                Ok(Some(socket)) => {
+                    let cmd = MiChatCommand::NewConnection(socket);
+                    to_parent.push_back(cmd);
+                }
+                Ok(None) => {
+                    info!("the listener socket wasn't actually ready");
+                }
+                Err(e) => {
+                    info!("listener.accept() errored: {}", e);
+                    event_loop.shutdown();
+                }
             }
-            Ok(None) => {
-                info!("the listener socket wasn't actually ready");
-            }
-            Err(e) => {
-                info!("listener.accept() errored: {}", e);
-                event_loop.shutdown();
-            }
+            self.sock_status.remove(mio::EventSet::readable());
         }
     }
 
