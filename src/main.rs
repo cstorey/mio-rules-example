@@ -233,10 +233,6 @@ impl Listener {
             Ok(Some(socket)) => {
                 let cmd = MiChatCommand::NewConnection(socket);
                 to_parent.push_back(cmd);
-
-/*
-*/
-
             }
             Ok(None) => {
                 info!("the listener socket wasn't actually ready");
