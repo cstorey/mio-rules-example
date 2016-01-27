@@ -292,14 +292,10 @@ impl mio::Handler for MiChat {
     type Message = ();
     fn ready(&mut self, event_loop: &mut mio::EventLoop<Self>, token: mio::Token, events: mio::EventSet) {
         info!("{:?}: {:?}", token, events);
-        match token {
-            _ => {
-                self.connections[token].handle_event(event_loop, events);
-                if self.connections[token].is_closed() {
-                    info!("Removing; {:?}", token);
-                    self.connections.remove(token);
-                }
-            }
+        self.connections[token].handle_event(event_loop, events);
+        if self.connections[token].is_closed() {
+            info!("Removing; {:?}", token);
+            self.connections.remove(token);
         }
 
         let mut parent_actions = VecDeque::new();
