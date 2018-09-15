@@ -1,11 +1,11 @@
 [package]
+authors = ["Ceri Storey <ceri@lshift.net>"]
 name = "michat"
 version = "0.1.0"
-authors = ["Ceri Storey <ceri@lshift.net>"]
 
 [dependencies]
-mio = "0.4.1"
 bytes = "0.2.10"
-log = "*"
-log4rs = "*"
-clap = "*"
+clap = "1.4.5"
+env_logger = "0.5.13"
+log = "0.3.2"
+mio = "0.4.1"
