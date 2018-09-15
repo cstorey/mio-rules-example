@@ -11,6 +11,7 @@ use mio::tcp::*;
 use mio::util::Slab;
 use mio::{TryRead, TryWrite};
 use std::collections::VecDeque;
+use std::ops;
 
 #[derive(Debug)]
 enum MiChatCommand {
@@ -20,6 +21,17 @@ enum MiChatCommand {
 
 struct MiChat {
     connections: Slab<EventHandler>,
+}
+
+trait RuleHandler {
+    fn handle_event(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet);
+    fn register(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token);
+    fn process_rules(
+        &mut self,
+        event_loop: &mut mio::EventLoop<MiChat>,
+        to_parent: &mut VecDeque<MiChatCommand>,
+    );
+    fn is_closed(&self) -> bool;
 }
 
 impl MiChat {
@@ -68,19 +80,7 @@ struct Connection {
     write_buf: Vec<u8>,
 }
 
-impl Connection {
-    fn new(socket: TcpStream, token: mio::Token) -> Connection {
-        Connection {
-            socket: socket,
-            sock_status: mio::EventSet::none(),
-            token: token,
-            read_buf: Vec::with_capacity(1024),
-            write_buf: Vec::new(),
-            read_eof: false,
-            failed: false,
-        }
-    }
-
+impl RuleHandler for Connection {
     fn register(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token) {
         event_loop
             .register_opt(
@@ -126,6 +126,23 @@ impl Connection {
         }
     }
 
+    fn is_closed(&self) -> bool {
+        self.failed || (self.read_eof && self.write_buf.is_empty())
+    }
+}
+
+impl Connection {
+    fn new(socket: TcpStream, token: mio::Token) -> Connection {
+        Connection {
+            socket: socket,
+            sock_status: mio::EventSet::none(),
+            token: token,
+            read_buf: Vec::with_capacity(1024),
+            write_buf: Vec::new(),
+            read_eof: false,
+            failed: false,
+        }
+    }
     fn process_buffer(&mut self, to_parent: &mut VecDeque<MiChatCommand>) {
         let mut prev = 0;
         info!(
@@ -220,10 +237,6 @@ impl Connection {
             .expect("EventLoop#reregister")
     }
 
-    fn is_closed(&self) -> bool {
-        self.failed || (self.read_eof && self.write_buf.is_empty())
-    }
-
     fn enqueue(&mut self, s: &str) {
         self.write_buf.extend(s.as_bytes());
         self.write_buf.push('\n' as u8);
@@ -243,7 +256,9 @@ impl Listener {
             sock_status: mio::EventSet::none(),
         }
     }
+}
 
+impl RuleHandler for Listener {
     fn register(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token) {
         event_loop
             .register(&self.listener, token)
@@ -260,7 +275,6 @@ impl Listener {
             self.sock_status
         );
     }
-
     fn process_rules(
         &mut self,
         event_loop: &mut mio::EventLoop<MiChat>,
@@ -296,40 +310,20 @@ enum EventHandler {
     Conn(Connection),
 }
 
-impl EventHandler {
-    fn handle_event(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
+impl ops::Deref for EventHandler {
+    type Target = RuleHandler;
+    fn deref(&self) -> &Self::Target {
         match self {
-            &mut EventHandler::Conn(ref mut conn) => conn.handle_event(_event_loop, events),
-            &mut EventHandler::Listener(ref mut listener) => {
-                listener.handle_event(_event_loop, events)
-            }
+            &EventHandler::Conn(ref conn) => conn,
+            &EventHandler::Listener(ref listener) => listener,
         }
     }
-
-    fn register(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token) {
+}
+impl ops::DerefMut for EventHandler {
+    fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
-            &EventHandler::Conn(ref conn) => conn.register(event_loop, token),
-            &EventHandler::Listener(ref listener) => listener.register(event_loop, token),
-        }
-    }
-
-    fn process_rules(
-        &mut self,
-        event_loop: &mut mio::EventLoop<MiChat>,
-        to_parent: &mut VecDeque<MiChatCommand>,
-    ) {
-        match self {
-            &mut EventHandler::Conn(ref mut conn) => conn.process_rules(event_loop, to_parent),
-            &mut EventHandler::Listener(ref mut listener) => {
-                listener.process_rules(event_loop, to_parent)
-            }
-        }
-    }
-
-    fn is_closed(&self) -> bool {
-        match self {
-            &EventHandler::Conn(ref conn) => conn.is_closed(),
-            &EventHandler::Listener(ref listener) => listener.is_closed(),
+            &mut EventHandler::Conn(ref mut conn) => conn,
+            &mut EventHandler::Listener(ref mut listener) => listener,
         }
     }
 }
