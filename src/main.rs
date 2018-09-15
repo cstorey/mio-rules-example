@@ -29,7 +29,7 @@ trait RuleHandler {
     fn process_rules(
         &mut self,
         event_loop: &mut mio::EventLoop<MiChat>,
-        to_parent: &mut VecDeque<MiChatCommand>,
+        to_parent: &mut FnMut(MiChatCommand),
     );
     fn is_closed(&self) -> bool;
 }
@@ -119,7 +119,7 @@ impl RuleHandler for Connection {
     fn process_rules(
         &mut self,
         event_loop: &mut mio::EventLoop<MiChat>,
-        to_parent: &mut VecDeque<MiChatCommand>,
+        to_parent: &mut FnMut(MiChatCommand),
     ) {
         if self.sock_status.is_readable() {
             self.read();
@@ -155,7 +155,7 @@ impl Connection {
             failed: false,
         }
     }
-    fn process_buffer(&mut self, to_parent: &mut VecDeque<MiChatCommand>) {
+    fn process_buffer(&mut self, to_parent: &mut FnMut(MiChatCommand)) {
         let mut prev = 0;
         info!(
             "{:?}: Read buffer: {:?}",
@@ -178,7 +178,7 @@ impl Connection {
             let s = String::from_utf8_lossy(&self.read_buf[prev..n]).to_string();
             let cmd = MiChatCommand::Broadcast(s);
             info!("Send! {:?}", cmd);
-            to_parent.push_back(cmd);
+            to_parent(cmd);
             prev = n + 1;
         }
         let remainder = self.read_buf[prev..].to_vec();
@@ -290,14 +290,14 @@ impl RuleHandler for Listener {
     fn process_rules(
         &mut self,
         event_loop: &mut mio::EventLoop<MiChat>,
-        to_parent: &mut VecDeque<MiChatCommand>,
+        to_parent: &mut FnMut(MiChatCommand),
     ) {
         if self.sock_status.is_readable() {
             info!("the listener socket is ready to accept a connection");
             match self.listener.accept() {
                 Ok(Some(socket)) => {
                     let cmd = MiChatCommand::NewConnection(socket);
-                    to_parent.push_back(cmd);
+                    to_parent(cmd);
                 }
                 Ok(None) => {
                     info!("the listener socket wasn't actually ready");
@@ -359,7 +359,7 @@ impl mio::Handler for MiChat {
         let mut parent_actions = VecDeque::new();
         loop {
             for conn in self.connections.iter_mut() {
-                conn.process_rules(event_loop, &mut parent_actions);
+                conn.process_rules(event_loop, &mut |action| parent_actions.push_back(action));
             }
             // Anything left to process?
             if parent_actions.is_empty() {
