@@ -50,22 +50,29 @@ impl MiChat {
     fn process_action(&mut self, msg: MiChatCommand, event_loop: &mut mio::EventLoop<MiChat>) {
         trace!("{:p}; got {:?}", self, msg);
         match msg {
-            MiChatCommand::Broadcast(s) => {
-                for c in self.connections.iter_mut() {
-                    if let &mut EventHandler::Conn(ref mut c) = c {
-                        c.enqueue(&s);
-                    }
-                }
-            }
+            MiChatCommand::Broadcast(s) => self.process_broadcast(s),
+            MiChatCommand::NewConnection(socket) => self.process_new_connection(event_loop, socket),
+        }
+    }
 
-            MiChatCommand::NewConnection(socket) => {
-                let token = self
-                    .connections
-                    .insert_with(|token| EventHandler::Conn(Connection::new(socket, token)))
-                    .expect("token insert");
-                &self.connections[token].register(event_loop, token);
+    fn process_broadcast(&mut self, s: String) {
+        for c in self.connections.iter_mut() {
+            if let &mut EventHandler::Conn(ref mut c) = c {
+                c.enqueue(&s);
             }
         }
+    }
+
+    fn process_new_connection(
+        &mut self,
+        event_loop: &mut mio::EventLoop<MiChat>,
+        socket: mio::tcp::TcpStream,
+    ) {
+        let token = self
+            .connections
+            .insert_with(|token| EventHandler::Conn(Connection::new(socket, token)))
+            .expect("token insert");
+        &self.connections[token].register(event_loop, token);
     }
 }
 
