@@ -56,10 +56,8 @@ impl MiChat {
     }
 
     fn process_broadcast(&mut self, s: String) {
-        for c in self.connections.iter_mut() {
-            if let &mut EventHandler::Conn(ref mut c) = c {
-                c.enqueue(&s);
-            }
+        for c in self.client_connections_mut() {
+            c.enqueue(&s);
         }
     }
 
@@ -73,6 +71,13 @@ impl MiChat {
             .insert_with(|token| EventHandler::Conn(Connection::new(socket, token)))
             .expect("token insert");
         &self.connections[token].register(event_loop, token);
+    }
+
+    fn client_connections_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut Connection> + 'a {
+        self.connections.iter_mut().filter_map(|it| match it {
+            &mut EventHandler::Conn(ref mut c) => Some(c),
+            _ => None,
+        })
     }
 }
 
