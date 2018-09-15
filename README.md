@@ -3,7 +3,7 @@ Rules-based Mio chat example.
 
 One thing that you notice after spending most of your time looking at the insides of a program, is that it's very easy to get bogged down in implementation detail, and end up with rather an optimistic view of how well the world outside of your application works. This is an especially common theme in the distributed systems field, and Peter Deutsch's infamous [Eight Fallacies of Distributed Computing](https://blogs.oracle.com/jag/resource/Fallacies.html) are a good example of this. 
 
-I recently read a [blog post from Adrian Colyer](http://blog.acolyer.org/2016/01/19/dcft/) on the paper "[Experience with Rules-Based Programming for Distributed, Concurrent, Fault-Tolerant Code](http://web.stanford.edu/~ouster/cgi-bin/papers/rules-atc15)". I've been fiddling with the idea of implementing distributed ystems in [Rust](http://rust-lang.org/) recently, so I figured I'd spend some seeing how well they fit together.
+I recently read a [blog post from Adrian Colyer](http://blog.acolyer.org/2016/01/19/dcft/) on the paper "[Experience with Rules-Based Programming for Distributed, Concurrent, Fault-Tolerant Code](http://web.stanford.edu/~ouster/cgi-bin/papers/rules-atc15)". I've been fiddling with the idea of implementing distributed systems in [Rust](http://rust-lang.org/) recently, so I figured I'd spend some seeing how well they fit together.
 
 A principal contribution of the paper itself, is the description of an implementation pattern where rather than having input events from the outside world drive a traditional state machine directly, we split the event handling into updating our understanding of the world, and then acting based on the updated state.
 

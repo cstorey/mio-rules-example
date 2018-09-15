@@ -7,7 +7,6 @@ extern crate log;
 extern crate clap;
 
 use mio::tcp::*;
-use mio::EventLoop;
 use mio::{TryRead,TryWrite};
 use mio::util::Slab;
 use std::collections::VecDeque;
