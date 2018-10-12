@@ -42,8 +42,10 @@ impl MiChat {
     }
 
     fn listen(&mut self, event_loop: &mut mio::EventLoop<MiChat>, listener: TcpListener) {
-        let l = EventHandler::Listener(Listener::new(listener));
-        let token = self.connections.insert(l).expect("insert listener");
+        let token = self
+            .connections
+            .insert_with(|token| EventHandler::Listener(Listener::new(listener, token)))
+            .expect("insert listener");
         &self.connections[token].register(event_loop, token);
     }
 
@@ -95,7 +97,7 @@ struct Connection {
 impl RuleHandler for Connection {
     fn register(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token) {
         event_loop
-            .register_opt(
+            .register(
                 &self.socket,
                 token,
                 mio::EventSet::readable(),
@@ -259,22 +261,37 @@ impl Connection {
 struct Listener {
     listener: TcpListener,
     sock_status: mio::EventSet,
+    token: mio::Token,
 }
 
 impl Listener {
-    fn new(listener: TcpListener) -> Listener {
+    fn new(listener: TcpListener, token: mio::Token) -> Listener {
         Listener {
             listener: listener,
             sock_status: mio::EventSet::none(),
+            token: token,
         }
+    }
+    fn reregister(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token) {
+        event_loop
+            .reregister(
+                &self.listener,
+                token,
+                mio::EventSet::readable(),
+                mio::PollOpt::edge() | mio::PollOpt::oneshot(),
+            ).expect("Register listener");
     }
 }
 
 impl RuleHandler for Listener {
     fn register(&self, event_loop: &mut mio::EventLoop<MiChat>, token: mio::Token) {
         event_loop
-            .register(&self.listener, token)
-            .expect("Register listener");
+            .register(
+                &self.listener,
+                token,
+                mio::EventSet::readable(),
+                mio::PollOpt::edge() | mio::PollOpt::oneshot(),
+            ).expect("Register listener");
     }
 
     fn handle_event(&mut self, _event_loop: &mut mio::EventLoop<MiChat>, events: mio::EventSet) {
@@ -295,7 +312,7 @@ impl RuleHandler for Listener {
         if self.sock_status.is_readable() {
             info!("the listener socket is ready to accept a connection");
             match self.listener.accept() {
-                Ok(Some(socket)) => {
+                Ok(Some((socket, _client))) => {
                     let cmd = MiChatCommand::NewConnection(socket);
                     to_parent(cmd);
                 }
@@ -308,6 +325,8 @@ impl RuleHandler for Listener {
                 }
             }
             self.sock_status.remove(mio::EventSet::readable());
+
+            self.reregister(event_loop, self.token)
         }
     }
 
