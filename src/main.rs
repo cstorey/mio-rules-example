@@ -271,14 +271,15 @@ impl Listener {
             token: token,
         }
     }
-    fn reregister(&self, event_loop: &mut mio::Poll, token: mio::Token) {
+    fn reregister(&self, event_loop: &mut mio::Poll, token: mio::Token) -> Result<(), Error> {
         event_loop
             .reregister(
                 &self.listener,
                 token,
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
-            ).expect("Register listener");
+            ).context("Register listener")?;
+            Ok(())
     }
 }
 
@@ -318,7 +319,7 @@ impl RuleHandler for Listener {
                 }
             }
 
-            self.reregister(event_loop, self.token);
+            self.reregister(event_loop, self.token)?;
         }
         Ok(())
     }
