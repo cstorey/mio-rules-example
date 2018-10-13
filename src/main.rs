@@ -364,7 +364,9 @@ impl MiChat {
             info!("Removing; {:?}", token);
             self.connections.remove(token.into());
         }
+    }
 
+    fn process(&mut self, event_loop: &mut mio::Poll) -> Result<(), Error> {
         let mut parent_actions = VecDeque::new();
         let mut failed = Vec::new();
         loop {
@@ -388,6 +390,8 @@ impl MiChat {
                 self.process_action(action, event_loop);
             }
         }
+
+        Ok(())
     }
 
     fn run(&mut self, event_loop: &mut mio::Poll) -> Result<(), Error> {
@@ -402,7 +406,7 @@ impl MiChat {
             self.ready(event_loop, ev.token(), ev.readiness())
         }
 
-        Ok(())
+        self.process(event_loop)
     }
 }
 
