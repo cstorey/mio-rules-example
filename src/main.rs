@@ -37,7 +37,6 @@ trait RuleHandler {
         event_loop: &mut mio::Poll,
         to_parent: &mut FnMut(MiChatCommand),
     ) -> Result<(), Error>;
-    fn should_close(&self) -> bool;
 }
 
 impl MiChat {
@@ -178,10 +177,6 @@ impl RuleHandler for Connection {
 
         Ok(())
     }
-
-    fn should_close(&self) -> bool {
-        self.read_eof && self.write_buf.is_empty()
-    }
 }
 
 impl Connection {
@@ -264,6 +259,10 @@ impl Connection {
             self.write_buf.len()
         );
         Ok(())
+    }
+
+    fn should_close(&self) -> bool {
+        self.read_eof && self.write_buf.is_empty()
     }
 
     fn reregister(&mut self, event_loop: &mut mio::Poll) -> Result<(), Error> {
@@ -354,10 +353,6 @@ impl RuleHandler for Listener {
             self.reregister(event_loop, self.token)?;
         }
         Ok(())
-    }
-
-    fn should_close(&self) -> bool {
-        false
     }
 }
 
