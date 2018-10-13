@@ -58,21 +58,34 @@ impl MiChat {
         Ok(())
     }
 
-    fn process_action(&mut self, src: usize, msg: MiChatCommand, event_loop: &mut mio::Poll) {
+    fn process_action(
+        &mut self,
+        src: usize,
+        msg: MiChatCommand,
+        event_loop: &mut mio::Poll,
+    ) -> Result<(), Error> {
         trace!("{:p}; from {:?}; got {:?}", self, src, msg);
         match msg {
-            MiChatCommand::Broadcast(s) => self.process_broadcast(s),
-            MiChatCommand::NewConnection(socket) => self.process_new_connection(event_loop, socket),
+            MiChatCommand::Broadcast(s) => self.process_broadcast(s)?,
+            MiChatCommand::NewConnection(socket) => {
+                self.process_new_connection(event_loop, socket)?
+            }
         }
+        Ok(())
     }
 
-    fn process_broadcast(&mut self, s: String) {
+    fn process_broadcast(&mut self, s: String) -> Result<(), Error> {
         for c in self.client_connections_mut() {
             c.enqueue(&s);
         }
+        Ok(())
     }
 
-    fn process_new_connection(&mut self, event_loop: &mut mio::Poll, socket: mio::tcp::TcpStream) {
+    fn process_new_connection(
+        &mut self,
+        event_loop: &mut mio::Poll,
+        socket: mio::tcp::TcpStream,
+    ) -> Result<(), Error> {
         let token = {
             let e = self.connections.vacant_entry();
             let token = mio::Token(e.key());
@@ -80,7 +93,8 @@ impl MiChat {
             e.insert(l);
             token
         };
-        &self.connections[token.into()].register(event_loop, token);
+        &self.connections[token.into()].register(event_loop, token)?;
+        Ok(())
     }
 
     fn client_connections_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut Connection> + 'a {
@@ -370,6 +384,7 @@ impl MiChat {
         let mut parent_actions = VecDeque::new();
         let mut failed = Vec::new();
         loop {
+            let mut something_done = false;
             for (idx, conn) in self.connections.iter_mut() {
                 if let Err(e) = conn.process_rules(event_loop, &mut |action| {
                     parent_actions.push_back((idx, action))
@@ -387,13 +402,16 @@ impl MiChat {
                 let conn = self.connections.remove(idx);
                 conn.deregister(event_loop)?;
             }
-            // Anything left to process?
-            if parent_actions.is_empty() {
-                break;
-            }
-
             for (src, action) in parent_actions.drain(..) {
-                self.process_action(src, action, event_loop);
+                something_done = true;
+                if let Err(e) = self.process_action(src, action, event_loop) {
+                    failed.push(src);
+                    error!("Error on action for {:?}; Dropping: {:?}", src, e);
+                }
+            }
+            // If we didn't do anything, we're done.
+            if !something_done {
+                break;
             }
         }
 
