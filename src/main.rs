@@ -110,7 +110,7 @@ impl RuleHandler for Connection {
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
             ).context("event loop register")?;
-            Ok(())
+        Ok(())
     }
 
     // Event updates arrive here
@@ -281,7 +281,7 @@ impl Listener {
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
             ).context("Register listener")?;
-            Ok(())
+        Ok(())
     }
 }
 
@@ -294,7 +294,7 @@ impl RuleHandler for Listener {
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
             ).context("Register listener")?;
-            Ok(())
+        Ok(())
     }
 
     fn handle_event(&mut self, _event_loop: &mut mio::Poll, events: mio::Ready) {
@@ -426,7 +426,9 @@ fn main() {
     let mut event_loop = mio::Poll::new().expect("Create event loop");
     let mut service = MiChat::new();
 
-    service.listen(&mut event_loop, listener).expect("Starting listener");
+    service
+        .listen(&mut event_loop, listener)
+        .expect("Starting listener");
     info!("running michat listener at: {:?}", address);
     service.run(&mut event_loop).expect("run");
 }
