@@ -90,7 +90,7 @@ impl MiChat {
         let token = {
             let e = self.connections.vacant_entry();
             let token = mio::Token(e.key());
-            let l = EventHandler::Conn(Connection::new(socket, token));
+            let l = EventHandler::Conn(Connection::new(socket, token)?);
             e.insert(l);
             token
         };
@@ -180,15 +180,15 @@ impl RuleHandler for Connection {
 }
 
 impl Connection {
-    fn new(socket: TcpStream, token: mio::Token) -> Connection {
-        Connection {
+    fn new(socket: TcpStream, token: mio::Token) -> Result<Connection, Error> {
+        Ok(Connection {
             socket: socket,
             sock_status: mio::Ready::empty(),
             token: token,
             read_buf: Vec::with_capacity(1024),
             write_buf: Vec::new(),
             read_eof: false,
-        }
+        })
     }
     fn process_buffer(&mut self, to_parent: &mut FnMut(MiChatCommand)) {
         let mut prev = 0;
