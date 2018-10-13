@@ -390,17 +390,19 @@ impl MiChat {
         }
     }
 
-    fn run(&mut self, event_loop: &mut mio::Poll) {
+    fn run(&mut self, event_loop: &mut mio::Poll) -> Result<(), Error> {
         loop {
-            self.run_once(event_loop);
+            self.run_once(event_loop)?;
         }
     }
-    fn run_once(&mut self, event_loop: &mut mio::Poll) {
+    fn run_once(&mut self, event_loop: &mut mio::Poll) -> Result<(), Error> {
         let mut events = mio::Events::with_capacity(1024);
-        event_loop.poll(&mut events, None).expect("Poll");
+        event_loop.poll(&mut events, None)?;
         for ev in &events {
             self.ready(event_loop, ev.token(), ev.readiness())
         }
+
+        Ok(())
     }
 }
 
@@ -422,5 +424,5 @@ fn main() {
 
     service.listen(&mut event_loop, listener).expect("Starting listener");
     info!("running michat listener at: {:?}", address);
-    service.run(&mut event_loop);
+    service.run(&mut event_loop).expect("run");
 }
