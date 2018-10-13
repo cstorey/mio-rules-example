@@ -5,9 +5,12 @@ extern crate mio;
 extern crate log;
 #[macro_use]
 extern crate clap;
+extern crate failure;
 extern crate slab;
 
 use clap::{App, Arg};
+use failure::Error;
+use failure::ResultExt;
 use mio::net::{TcpListener, TcpStream};
 use slab::Slab;
 use std::collections::VecDeque;
@@ -27,7 +30,11 @@ struct MiChat {
 trait RuleHandler {
     fn handle_event(&mut self, _event_loop: &mut mio::Poll, events: mio::Ready);
     fn register(&self, event_loop: &mut mio::Poll, token: mio::Token);
-    fn process_rules(&mut self, event_loop: &mut mio::Poll, to_parent: &mut FnMut(MiChatCommand));
+    fn process_rules(
+        &mut self,
+        event_loop: &mut mio::Poll,
+        to_parent: &mut FnMut(MiChatCommand),
+    ) -> Result<(), Error>;
     fn is_closed(&self) -> bool;
 }
 
@@ -117,22 +124,28 @@ impl RuleHandler for Connection {
 
     // actions are processed here on down.
 
-    fn process_rules(&mut self, event_loop: &mut mio::Poll, to_parent: &mut FnMut(MiChatCommand)) {
+    fn process_rules(
+        &mut self,
+        event_loop: &mut mio::Poll,
+        to_parent: &mut FnMut(MiChatCommand),
+    ) -> Result<(), Error> {
         if self.sock_status.is_readable() {
-            self.read();
             self.sock_status.remove(mio::Ready::readable());
+            self.read()?;
         }
 
         self.process_buffer(to_parent);
 
         if self.sock_status.is_writable() {
-            self.write();
             self.sock_status.remove(mio::Ready::writable());
+            self.write()?;
         }
 
         if !self.is_closed() {
             self.reregister(event_loop)
         }
+
+        Ok(())
     }
 
     fn is_closed(&self) -> bool {
@@ -187,45 +200,40 @@ impl Connection {
         self.read_buf = remainder;
     }
 
-    fn read(&mut self) {
+    fn read(&mut self) -> Result<(), Error> {
         let mut abuf = vec![0; 1024];
-        match self.socket.read(&mut abuf) {
-            Ok(0) => {
+        match self.socket.read(&mut abuf).context("Reading socket")? {
+            0 => {
                 info!("{:?}: EOF!", self.socket.peer_addr());
-                self.read_eof = true
+                self.read_eof = true;
+                Ok(())
             }
-            Ok(n) => {
+            n => {
                 info!("{:?}: Read {}bytes", self.socket.peer_addr(), n);
                 self.read_buf.extend(&abuf[0..n]);
-            }
-            Err(e) => {
-                error!("got an error trying to read; err={:?}", e);
-                self.failed = true;
+                Ok(())
             }
         }
     }
 
-    fn write(&mut self) {
-        match self.socket.write(&mut self.write_buf) {
-            Ok(n) => {
-                info!(
-                    "{:?}: Wrote {} of {} in buffer",
-                    self.socket.peer_addr(),
-                    n,
-                    self.write_buf.len()
-                );
-                self.write_buf = self.write_buf[n..].to_vec();
-                info!(
-                    "{:?}: Now {:?}b",
-                    self.socket.peer_addr(),
-                    self.write_buf.len()
-                );
-            }
-            Err(e) => {
-                error!("got an error trying to write; err={:?}", e);
-                self.failed = true;
-            }
-        }
+    fn write(&mut self) -> Result<(), Error> {
+        let n = self
+            .socket
+            .write(&mut self.write_buf)
+            .context("writing buffer")?;
+        info!(
+            "{:?}: Wrote {} of {} in buffer",
+            self.socket.peer_addr(),
+            n,
+            self.write_buf.len()
+        );
+        self.write_buf = self.write_buf[n..].to_vec();
+        info!(
+            "{:?}: Now {:?}b",
+            self.socket.peer_addr(),
+            self.write_buf.len()
+        );
+        Ok(())
     }
 
     fn reregister(&mut self, event_loop: &mut mio::Poll) {
@@ -293,23 +301,24 @@ impl RuleHandler for Listener {
             self.sock_status
         );
     }
-    fn process_rules(&mut self, event_loop: &mut mio::Poll, to_parent: &mut FnMut(MiChatCommand)) {
+    fn process_rules(
+        &mut self,
+        event_loop: &mut mio::Poll,
+        to_parent: &mut FnMut(MiChatCommand),
+    ) -> Result<(), Error> {
         if self.sock_status.is_readable() {
             info!("the listener socket is ready to accept a connection");
-            match self.listener.accept() {
-                Ok((socket, _client)) => {
+            self.sock_status.remove(mio::Ready::readable());
+            match self.listener.accept().context("Accept listening socket")? {
+                (socket, _client) => {
                     let cmd = MiChatCommand::NewConnection(socket);
                     to_parent(cmd);
                 }
-                Err(e) => {
-                    info!("listener.accept() errored: {}", e);
-                    panic!("Error handle me: {}", e);
-                }
             }
-            self.sock_status.remove(mio::Ready::readable());
 
-            self.reregister(event_loop, self.token)
+            self.reregister(event_loop, self.token);
         }
+        Ok(())
     }
 
     fn is_closed(&self) -> bool {
@@ -351,9 +360,18 @@ impl MiChat {
         }
 
         let mut parent_actions = VecDeque::new();
+        let mut failed = Vec::new();
         loop {
-            for (_, conn) in self.connections.iter_mut() {
-                conn.process_rules(event_loop, &mut |action| parent_actions.push_back(action));
+            for (idx, conn) in self.connections.iter_mut() {
+                if let Err(e) =
+                    conn.process_rules(event_loop, &mut |action| parent_actions.push_back(action))
+                {
+                    failed.push(idx);
+                    error!("Error on connection {:?}; Dropping: {:?}", idx, e);
+                }
+            }
+            for idx in failed.drain(..) {
+                self.connections.remove(idx);
             }
             // Anything left to process?
             if parent_actions.is_empty() {
