@@ -57,8 +57,8 @@ impl MiChat {
         Ok(())
     }
 
-    fn process_action(&mut self, msg: MiChatCommand, event_loop: &mut mio::Poll) {
-        trace!("{:p}; got {:?}", self, msg);
+    fn process_action(&mut self, src: usize, msg: MiChatCommand, event_loop: &mut mio::Poll) {
+        trace!("{:p}; from {:?}; got {:?}", self, src, msg);
         match msg {
             MiChatCommand::Broadcast(s) => self.process_broadcast(s),
             MiChatCommand::NewConnection(socket) => self.process_new_connection(event_loop, socket),
@@ -362,9 +362,9 @@ impl MiChat {
         let mut failed = Vec::new();
         loop {
             for (idx, conn) in self.connections.iter_mut() {
-                if let Err(e) =
-                    conn.process_rules(event_loop, &mut |action| parent_actions.push_back(action))
-                {
+                if let Err(e) = conn.process_rules(event_loop, &mut |action| {
+                    parent_actions.push_back((idx, action))
+                }) {
                     failed.push(idx);
                     error!("Error on connection {:?}; Dropping: {:?}", idx, e);
                 }
@@ -382,8 +382,8 @@ impl MiChat {
                 break;
             }
 
-            for action in parent_actions.drain(..) {
-                self.process_action(action, event_loop);
+            for (src, action) in parent_actions.drain(..) {
+                self.process_action(src, action, event_loop);
             }
         }
 
