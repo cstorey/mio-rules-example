@@ -30,6 +30,7 @@ struct MiChat {
 trait RuleHandler {
     fn handle_event(&mut self, _event_loop: &mut mio::Poll, events: mio::Ready);
     fn register(&self, event_loop: &mut mio::Poll, token: mio::Token) -> Result<(), Error>;
+    fn deregister(&self, event_loop: &mut mio::Poll) -> Result<(), Error>;
     fn process_rules(
         &mut self,
         event_loop: &mut mio::Poll,
@@ -109,6 +110,10 @@ impl RuleHandler for Connection {
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
             ).context("event loop register")?;
+        Ok(())
+    }
+    fn deregister(&self, event_loop: &mut mio::Poll) -> Result<(), Error> {
+        event_loop.deregister(&self.socket)?;
         Ok(())
     }
 
@@ -294,6 +299,10 @@ impl RuleHandler for Listener {
             ).context("Register listener")?;
         Ok(())
     }
+    fn deregister(&self, event_loop: &mut mio::Poll) -> Result<(), Error> {
+        event_loop.deregister(&self.listener)?;
+        Ok(())
+    }
 
     fn handle_event(&mut self, _event_loop: &mut mio::Poll, events: mio::Ready) {
         assert!(events.is_readable());
@@ -375,7 +384,8 @@ impl MiChat {
                 }
             }
             for idx in failed.drain(..) {
-                self.connections.remove(idx);
+                let conn = self.connections.remove(idx);
+                conn.deregister(event_loop)?;
             }
             // Anything left to process?
             if parent_actions.is_empty() {
