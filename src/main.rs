@@ -97,7 +97,6 @@ struct Connection {
     token: mio::Token,
     read_buf: Vec<u8>,
     read_eof: bool,
-    failed: bool,
     write_buf: Vec<u8>,
 }
 
@@ -151,7 +150,7 @@ impl RuleHandler for Connection {
     }
 
     fn is_closed(&self) -> bool {
-        self.failed || (self.read_eof && self.write_buf.is_empty())
+        self.read_eof && self.write_buf.is_empty()
     }
 }
 
@@ -164,7 +163,6 @@ impl Connection {
             read_buf: Vec::with_capacity(1024),
             write_buf: Vec::new(),
             read_eof: false,
-            failed: false,
         }
     }
     fn process_buffer(&mut self, to_parent: &mut FnMut(MiChatCommand)) {
@@ -315,12 +313,9 @@ impl RuleHandler for Listener {
         if self.sock_status.is_readable() {
             info!("the listener socket is ready to accept a connection");
             self.sock_status.remove(mio::Ready::readable());
-            match self.listener.accept().context("Accept listening socket")? {
-                (socket, _client) => {
-                    let cmd = MiChatCommand::NewConnection(socket);
-                    to_parent(cmd);
-                }
-            }
+            let (socket, _client) = self.listener.accept().context("Accept listening socket")?;
+            let cmd = MiChatCommand::NewConnection(socket);
+            to_parent(cmd);
 
             self.reregister(event_loop, self.token)?;
         }
