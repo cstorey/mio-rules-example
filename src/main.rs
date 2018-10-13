@@ -35,7 +35,7 @@ trait RuleHandler {
         event_loop: &mut mio::Poll,
         to_parent: &mut FnMut(MiChatCommand),
     ) -> Result<(), Error>;
-    fn is_closed(&self) -> bool;
+    fn should_close(&self) -> bool;
 }
 
 impl MiChat {
@@ -142,14 +142,14 @@ impl RuleHandler for Connection {
             self.write()?;
         }
 
-        if !self.is_closed() {
+        if !self.should_close() {
             self.reregister(event_loop)?;
         }
 
         Ok(())
     }
 
-    fn is_closed(&self) -> bool {
+    fn should_close(&self) -> bool {
         self.read_eof && self.write_buf.is_empty()
     }
 }
@@ -322,7 +322,7 @@ impl RuleHandler for Listener {
         Ok(())
     }
 
-    fn is_closed(&self) -> bool {
+    fn should_close(&self) -> bool {
         false
     }
 }
@@ -355,10 +355,6 @@ impl MiChat {
     fn ready(&mut self, event_loop: &mut mio::Poll, token: mio::Token, events: mio::Ready) {
         info!("{:?}: {:?}", token, events);
         self.connections[token.into()].handle_event(event_loop, events);
-        if self.connections[token.into()].is_closed() {
-            info!("Removing; {:?}", token);
-            self.connections.remove(token.into());
-        }
     }
 
     fn process(&mut self, event_loop: &mut mio::Poll) -> Result<(), Error> {
@@ -371,6 +367,11 @@ impl MiChat {
                 {
                     failed.push(idx);
                     error!("Error on connection {:?}; Dropping: {:?}", idx, e);
+                }
+
+                if conn.should_close() {
+                    failed.push(idx);
+                    info!("Removing; {:?}", idx);
                 }
             }
             for idx in failed.drain(..) {
