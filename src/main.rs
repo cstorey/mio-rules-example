@@ -29,7 +29,7 @@ struct MiChat {
 
 trait RuleHandler {
     fn handle_event(&mut self, _event_loop: &mut mio::Poll, events: mio::Ready);
-    fn register(&self, event_loop: &mut mio::Poll, token: mio::Token);
+    fn register(&self, event_loop: &mut mio::Poll, token: mio::Token) -> Result<(), Error>;
     fn process_rules(
         &mut self,
         event_loop: &mut mio::Poll,
@@ -45,7 +45,7 @@ impl MiChat {
         }
     }
 
-    fn listen(&mut self, event_loop: &mut mio::Poll, listener: TcpListener) {
+    fn listen(&mut self, event_loop: &mut mio::Poll, listener: TcpListener) -> Result<(), Error> {
         let token = {
             let e = self.connections.vacant_entry();
             let token = mio::Token(e.key());
@@ -53,7 +53,8 @@ impl MiChat {
             e.insert(l);
             token
         };
-        &self.connections[token.into()].register(event_loop, token);
+        &self.connections[token.into()].register(event_loop, token)?;
+        Ok(())
     }
 
     fn process_action(&mut self, msg: MiChatCommand, event_loop: &mut mio::Poll) {
@@ -101,14 +102,15 @@ struct Connection {
 }
 
 impl RuleHandler for Connection {
-    fn register(&self, event_loop: &mut mio::Poll, token: mio::Token) {
+    fn register(&self, event_loop: &mut mio::Poll, token: mio::Token) -> Result<(), Error> {
         event_loop
             .register(
                 &self.socket,
                 token,
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
-            ).expect("event loop register");
+            ).context("event loop register")?;
+            Ok(())
     }
 
     // Event updates arrive here
@@ -284,14 +286,15 @@ impl Listener {
 }
 
 impl RuleHandler for Listener {
-    fn register(&self, event_loop: &mut mio::Poll, token: mio::Token) {
+    fn register(&self, event_loop: &mut mio::Poll, token: mio::Token) -> Result<(), Error> {
         event_loop
             .register(
                 &self.listener,
                 token,
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
-            ).expect("Register listener");
+            ).context("Register listener")?;
+            Ok(())
     }
 
     fn handle_event(&mut self, _event_loop: &mut mio::Poll, events: mio::Ready) {
@@ -417,7 +420,7 @@ fn main() {
     let mut event_loop = mio::Poll::new().expect("Create event loop");
     let mut service = MiChat::new();
 
-    service.listen(&mut event_loop, listener);
+    service.listen(&mut event_loop, listener).expect("Starting listener");
     info!("running michat listener at: {:?}", address);
     service.run(&mut event_loop);
 }
