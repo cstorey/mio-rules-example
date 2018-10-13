@@ -21,6 +21,7 @@ use std::ops;
 enum MiChatCommand {
     Broadcast(String),
     NewConnection(TcpStream),
+    CloseConnection,
 }
 
 struct MiChat {
@@ -70,6 +71,7 @@ impl MiChat {
             MiChatCommand::NewConnection(socket) => {
                 self.process_new_connection(event_loop, socket)?
             }
+            MiChatCommand::CloseConnection => self.process_close(src, event_loop)?,
         }
         Ok(())
     }
@@ -94,6 +96,13 @@ impl MiChat {
             token
         };
         &self.connections[token.into()].register(event_loop, token)?;
+        Ok(())
+    }
+
+    fn process_close(&mut self, src: usize, event_loop: &mut mio::Poll) -> Result<(), Error> {
+        debug!("Processing close: {:?}", src);
+        let conn = self.connections.remove(src);
+        conn.deregister(event_loop)?;
         Ok(())
     }
 
@@ -161,7 +170,9 @@ impl RuleHandler for Connection {
             self.write()?;
         }
 
-        if !self.should_close() {
+        if self.should_close() {
+            to_parent(MiChatCommand::CloseConnection)
+        } else {
             self.reregister(event_loop)?;
         }
 
@@ -392,13 +403,9 @@ impl MiChat {
                     failed.push(idx);
                     error!("Error on connection {:?}; Dropping: {:?}", idx, e);
                 }
-
-                if conn.should_close() {
-                    failed.push(idx);
-                    info!("Removing; {:?}", idx);
-                }
             }
             for idx in failed.drain(..) {
+                debug!("Remove failed; {:?}", idx);
                 let conn = self.connections.remove(idx);
                 conn.deregister(event_loop)?;
             }
