@@ -116,6 +116,7 @@ impl MiChat {
 #[derive(Debug)]
 struct Connection {
     socket: TcpStream,
+    peer: std::net::SocketAddr,
     sock_status: mio::Ready,
     token: mio::Token,
     read_buf: Vec<u8>,
@@ -144,9 +145,7 @@ impl RuleHandler for Connection {
         self.sock_status.insert(events);
         info!(
             "Connection::handle_event: {:?}; this time: {:?}; now: {:?}",
-            self.socket.peer_addr(),
-            events,
-            self.sock_status
+            self.peer, events, self.sock_status
         );
     }
 
@@ -181,8 +180,10 @@ impl RuleHandler for Connection {
 
 impl Connection {
     fn new(socket: TcpStream, token: mio::Token) -> Result<Connection, Error> {
+        let peer = socket.peer_addr()?;
         Ok(Connection {
             socket: socket,
+            peer: peer,
             sock_status: mio::Ready::empty(),
             token: token,
             read_buf: Vec::with_capacity(1024),
@@ -192,11 +193,7 @@ impl Connection {
     }
     fn process_buffer(&mut self, to_parent: &mut FnMut(MiChatCommand)) {
         let mut prev = 0;
-        info!(
-            "{:?}: Read buffer: {:?}",
-            self.socket.peer_addr(),
-            self.read_buf
-        );
+        info!("{:?}: Read buffer: {:?}", self.peer, self.read_buf);
         for n in self.read_buf.iter().enumerate().filter_map(|(i, e)| {
             if *e == '\n' as u8 {
                 Some(i)
@@ -206,7 +203,7 @@ impl Connection {
         }) {
             info!(
                 "{:?}: Pos: {:?}; chunk: {:?}",
-                self.socket.peer_addr(),
+                self.peer,
                 n,
                 &self.read_buf[prev..n]
             );
@@ -217,11 +214,7 @@ impl Connection {
             prev = n + 1;
         }
         let remainder = self.read_buf[prev..].to_vec();
-        info!(
-            "{:?}: read Remainder: {}",
-            self.socket.peer_addr(),
-            remainder.len()
-        );
+        info!("{:?}: read Remainder: {}", self.peer, remainder.len());
         self.read_buf = remainder;
     }
 
@@ -229,12 +222,12 @@ impl Connection {
         let mut abuf = vec![0; 1024];
         match self.socket.read(&mut abuf).context("Reading socket")? {
             0 => {
-                info!("{:?}: EOF!", self.socket.peer_addr());
+                info!("{:?}: EOF!", self.peer);
                 self.read_eof = true;
                 Ok(())
             }
             n => {
-                info!("{:?}: Read {}bytes", self.socket.peer_addr(), n);
+                info!("{:?}: Read {}bytes", self.peer, n);
                 self.read_buf.extend(&abuf[0..n]);
                 Ok(())
             }
@@ -248,16 +241,12 @@ impl Connection {
             .context("writing buffer")?;
         info!(
             "{:?}: Wrote {} of {} in buffer",
-            self.socket.peer_addr(),
+            self.peer,
             n,
             self.write_buf.len()
         );
         self.write_buf = self.write_buf[n..].to_vec();
-        info!(
-            "{:?}: Now {:?}b",
-            self.socket.peer_addr(),
-            self.write_buf.len()
-        );
+        info!("{:?}: Now {:?}b", self.peer, self.write_buf.len());
         Ok(())
     }
 
