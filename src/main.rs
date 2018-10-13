@@ -142,7 +142,7 @@ impl RuleHandler for Connection {
         }
 
         if !self.is_closed() {
-            self.reregister(event_loop)
+            self.reregister(event_loop)?;
         }
 
         Ok(())
@@ -236,7 +236,7 @@ impl Connection {
         Ok(())
     }
 
-    fn reregister(&mut self, event_loop: &mut mio::Poll) {
+    fn reregister(&mut self, event_loop: &mut mio::Poll) -> Result<(), Error> {
         let mut flags = mio::Ready::readable();
         if !self.write_buf.is_empty() {
             flags.insert(mio::Ready::writable());
@@ -245,7 +245,9 @@ impl Connection {
 
         event_loop
             .reregister(&self.socket, self.token, flags, mio::PollOpt::oneshot())
-            .expect("EventLoop#reregister")
+            .context("EventLoop#reregister")?;
+
+        Ok(())
     }
 
     fn enqueue(&mut self, s: &str) {
