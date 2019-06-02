@@ -1,0 +1,48 @@
+# Borrowed from https://github.com/sfackler/rust-postgres/blob/04bd98e7edb238511661b311c725a176012bca6a/.circleci/config.yml
+# Used under MIT license.
+
+restore_registry: &RESTORE_REGISTRY
+  restore_cache:
+    key: registry
+save_registry: &SAVE_REGISTRY
+  save_cache:
+    key: registry-{{ .BuildNum }}
+    paths:
+    - /usr/local/cargo/registry/index
+deps_key: &DEPS_KEY
+  key: deps-{{ checksum "~/rust-version" }}-{{ checksum "Cargo.lock" }}
+restore_deps: &RESTORE_DEPS
+  restore_cache:
+    <<: *DEPS_KEY
+save_deps: &SAVE_DEPS
+  save_cache:
+    <<: *DEPS_KEY
+    paths:
+    - target
+    - /usr/local/cargo/registry/cache
+
+version: 2.1
+jobs:
+  buildtest:
+    docker:
+      - image: circleci/rust:1.34.1
+        environment:
+          RUSTFLAGS: -D warnings
+    steps:
+      - checkout
+      - run: git merge master
+      - run: rustup component add rustfmt
+      - run: rustfmt --version
+      - run: cargo fmt --all -- --check
+      - *RESTORE_REGISTRY
+      - run: cargo generate-lockfile
+      - *SAVE_REGISTRY
+      - run: rustc --version | tee ~/rust-version
+      - *RESTORE_DEPS
+      - run: cargo build --tests
+      - *SAVE_DEPS
+      - run: cargo test
+workflows:
+  testall:
+    jobs:
+      - buildtest
