@@ -132,7 +132,8 @@ impl RuleHandler for Connection {
                 token,
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
-            ).context("event loop register")?;
+            )
+            .context("event loop register")?;
         Ok(())
     }
     fn deregister(&self, event_loop: &mut mio::Poll) -> Result<(), Error> {
@@ -296,7 +297,8 @@ impl Listener {
                 token,
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
-            ).context("Register listener")?;
+            )
+            .context("Register listener")?;
         Ok(())
     }
 }
@@ -309,7 +311,8 @@ impl RuleHandler for Listener {
                 token,
                 mio::Ready::readable(),
                 mio::PollOpt::edge() | mio::PollOpt::oneshot(),
-            ).context("Register listener")?;
+            )
+            .context("Register listener")?;
         Ok(())
     }
     fn deregister(&self, event_loop: &mut mio::Poll) -> Result<(), Error> {
@@ -433,7 +436,8 @@ fn main() {
                 .short("l")
                 .takes_value(true)
                 .required(true),
-        ).get_matches();
+        )
+        .get_matches();
 
     let address = value_t_or_exit!(matches.value_of("bind"), std::net::SocketAddr);
     let listener = TcpListener::bind(&address).expect("bind");
