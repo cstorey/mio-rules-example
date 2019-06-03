@@ -5,7 +5,7 @@ version = "0.1.0"
 
 [dependencies]
 bytes = "0.4.12"
-clap = "1.4.5"
+clap = "2.33.0"
 env_logger = "0.6.1"
 log = "^0.4"
 mio = "0.6.19"
