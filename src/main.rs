@@ -35,7 +35,7 @@ trait RuleHandler {
     fn process_rules(
         &mut self,
         event_loop: &mut mio::Poll,
-        to_parent: &mut FnMut(MiChatCommand),
+        to_parent: &mut dyn FnMut(MiChatCommand),
     ) -> Result<(), Error>;
 }
 
@@ -155,7 +155,7 @@ impl RuleHandler for Connection {
     fn process_rules(
         &mut self,
         event_loop: &mut mio::Poll,
-        to_parent: &mut FnMut(MiChatCommand),
+        to_parent: &mut dyn FnMut(MiChatCommand),
     ) -> Result<(), Error> {
         if self.sock_status.is_readable() {
             self.sock_status.remove(mio::Ready::readable());
@@ -192,7 +192,7 @@ impl Connection {
             read_eof: false,
         })
     }
-    fn process_buffer(&mut self, to_parent: &mut FnMut(MiChatCommand)) {
+    fn process_buffer(&mut self, to_parent: &mut dyn FnMut(MiChatCommand)) {
         let mut prev = 0;
         info!("{:?}: Read buffer: {:?}", self.peer, self.read_buf);
         for n in self.read_buf.iter().enumerate().filter_map(|(i, e)| {
@@ -333,7 +333,7 @@ impl RuleHandler for Listener {
     fn process_rules(
         &mut self,
         event_loop: &mut mio::Poll,
-        to_parent: &mut FnMut(MiChatCommand),
+        to_parent: &mut dyn FnMut(MiChatCommand),
     ) -> Result<(), Error> {
         if self.sock_status.is_readable() {
             info!("the listener socket is ready to accept a connection");
@@ -355,7 +355,7 @@ enum EventHandler {
 }
 
 impl ops::Deref for EventHandler {
-    type Target = RuleHandler;
+    type Target = dyn RuleHandler;
     fn deref(&self) -> &Self::Target {
         match self {
             &EventHandler::Conn(ref conn) => conn,
