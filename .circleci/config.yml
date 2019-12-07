@@ -25,12 +25,16 @@ version: 2.1
 jobs:
   buildtest:
     docker:
-      - image: circleci/rust:1.34.1
+      - image: circleci/rust:1
         environment:
           RUSTFLAGS: -D warnings
     steps:
       - checkout
-      - run: git merge master
+      - run: |
+          upstream=${CIRCLE_REPOSITORY_URL:-$(git remote  get-url origin)}
+          git config --global user.email "nada@circleci.example"
+          git config --global user.name "CircleCI build for ${upstream}"
+          git merge master
       - run: rustup component add rustfmt
       - run: rustfmt --version
       - run: cargo fmt --all -- --check
